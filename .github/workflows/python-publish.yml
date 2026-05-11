@@ -1,30 +1,92 @@
 name: Upload Python Package
 
 on:
+  push:
+    branches:
+      - master
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - master
   release:
-    types: [created]
+    types:
+      - created
+
+permissions:
+  contents: read
 
 jobs:
-  deploy:
+  build-and-publish:
     runs-on: ubuntu-latest
-
+    
     steps:
-    - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.x'
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install setuptools wheel twine
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install build twine
 
-    - name: Build and publish
-      env:
-        TWINE_USERNAME: __token__
-        TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-      run: |
-        python setup.py sdist bdist_wheel
-        twine upload dist/*
+      - name: Build package
+        run: |
+          echo "Building distribution packages..."
+          python -m build
+          echo "Build artifacts:"
+          ls -lah dist/
+
+      - name: Verify package with twine
+        run: |
+          echo "Checking package metadata..."
+          twine check dist/* --strict
+
+      - name: Display package info
+        run: |
+          echo "Package contents:"
+          tar -tzf dist/*.tar.gz | head -20
+          echo ""
+          echo "Wheel contents:"
+          unzip -l dist/*.whl | head -20
+
+      - name: Publish package to PyPI
+        if: github.event_name == 'release' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          echo "Uploading to PyPI..."
+          twine upload dist/* --verbose --skip-existing
+
+      - name: Upload to TestPyPI (on push to master)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.TEST_PYPI_API_TOKEN }}
+        continue-on-error: true
+        run: |
+          echo "Uploading test build to TestPyPI..."
+          twine upload dist/* -r testpypi --verbose --skip-existing || echo "TestPyPI upload failed (this is optional)"
+
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: python-package-distributions
+          path: dist/
+          retention-days: 7
+
+      - name: Publish to GitHub Releases
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
