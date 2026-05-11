@@ -1,23 +1,87 @@
 import unittest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock, mock_open
 from pathlib import Path
 from io import BytesIO
 import sys
 import os
 
-# Allow running from project root
 sys.path.insert(0, os.path.dirname(__file__))
 
-from bing_image_downloader.bing import Bing
+from bing_image_downloader.bing import Bing, _is_valid_image
 from bing_image_downloader.downloader import download
 
 
 def make_bing(query='cats', limit=5, output_dir=None, adult='off',
-              timeout=60, filter='', resize=None, verbose=False):
+              timeout=60, filter='', verbose=False):
     if output_dir is None:
         output_dir = Path('/tmp/test_images')
-    return Bing(query, limit, output_dir, adult, timeout, filter, resize, verbose)
+    return Bing(query, limit, output_dir, adult, timeout, filter, verbose)
 
+
+# ---------------------------------------------------------------------------
+# Image validation (magic bytes)
+# ---------------------------------------------------------------------------
+
+class TestIsValidImage(unittest.TestCase):
+    def test_jpeg(self):
+        self.assertTrue(_is_valid_image(b'\xff\xd8\xff' + b'\x00' * 10))
+
+    def test_png(self):
+        self.assertTrue(_is_valid_image(b'\x89PNG\r\n\x1a\n' + b'\x00' * 10))
+
+    def test_gif87(self):
+        self.assertTrue(_is_valid_image(b'GIF87a' + b'\x00' * 10))
+
+    def test_gif89(self):
+        self.assertTrue(_is_valid_image(b'GIF89a' + b'\x00' * 10))
+
+    def test_bmp(self):
+        self.assertTrue(_is_valid_image(b'BM' + b'\x00' * 10))
+
+    def test_webp(self):
+        self.assertTrue(_is_valid_image(b'RIFF\x00\x00\x00\x00WEBP' + b'\x00' * 10))
+
+    def test_riff_non_webp_rejected(self):
+        self.assertFalse(_is_valid_image(b'RIFF\x00\x00\x00\x00WAVE' + b'\x00' * 10))
+
+    def test_tiff_little_endian(self):
+        self.assertTrue(_is_valid_image(b'II\x2a\x00' + b'\x00' * 10))
+
+    def test_tiff_big_endian(self):
+        self.assertTrue(_is_valid_image(b'MM\x00\x2a' + b'\x00' * 10))
+
+    def test_invalid_data(self):
+        self.assertFalse(_is_valid_image(b'not an image'))
+
+    def test_empty(self):
+        self.assertFalse(_is_valid_image(b''))
+
+
+# ---------------------------------------------------------------------------
+# Bing.__init__
+# ---------------------------------------------------------------------------
+
+class TestBingInit(unittest.TestCase):
+    def test_valid_init(self):
+        b = make_bing(query='dogs', limit=10, timeout=30)
+        self.assertEqual(b.query, 'dogs')
+        self.assertEqual(b.limit, 10)
+        self.assertEqual(b.timeout, 30)
+        self.assertEqual(b.download_count, 0)
+        self.assertEqual(b.page_counter, 0)
+
+    def test_limit_must_be_int(self):
+        with self.assertRaises(AssertionError):
+            make_bing(limit='10')
+
+    def test_timeout_must_be_int(self):
+        with self.assertRaises(AssertionError):
+            make_bing(timeout=60.0)
+
+
+# ---------------------------------------------------------------------------
+# Bing.get_filter
+# ---------------------------------------------------------------------------
 
 class TestGetFilter(unittest.TestCase):
     def setUp(self):
@@ -42,264 +106,217 @@ class TestGetFilter(unittest.TestCase):
         self.assertEqual(self.bing.get_filter(''), '')
 
 
-class TestBingInit(unittest.TestCase):
-    def test_valid_init(self):
-        b = make_bing(query='dogs', limit=10, timeout=30)
-        self.assertEqual(b.query, 'dogs')
-        self.assertEqual(b.limit, 10)
-        self.assertEqual(b.timeout, 30)
-        self.assertEqual(b.download_count, 0)
-        self.assertEqual(b.page_counter, 0)
-
-    def test_limit_must_be_int(self):
-        with self.assertRaises(AssertionError):
-            make_bing(limit='10')
-
-    def test_timeout_must_be_int(self):
-        with self.assertRaises(AssertionError):
-            make_bing(timeout=60.0)
-
-    def test_resize_must_be_tuple_or_none(self):
-        b = make_bing(resize=(100, 100))
-        self.assertEqual(b.resize, (100, 100))
-
-        b2 = make_bing(resize=None)
-        self.assertIsNone(b2.resize)
-
-        with self.assertRaises(AssertionError):
-            make_bing(resize=[100, 100])
-
+# ---------------------------------------------------------------------------
+# Bing.save_image
+# ---------------------------------------------------------------------------
 
 class TestSaveImage(unittest.TestCase):
-    def _make_valid_png(self):
-        from PIL import Image
-        buf = BytesIO()
-        img = Image.new('RGB', (10, 10), color='red')
-        img.save(buf, format='PNG')
-        return buf.getvalue()
+    VALID_PNG = b'\x89PNG\r\n\x1a\n' + b'\x00' * 20
 
     @patch('bing_image_downloader.bing.urllib.request.urlopen')
     def test_save_valid_image(self, mock_urlopen):
-        png_data = self._make_valid_png()
-        mock_response = MagicMock()
-        mock_response.read.return_value = png_data
-        mock_urlopen.return_value = mock_response
-
+        mock_urlopen.return_value = MagicMock(read=lambda: self.VALID_PNG)
         b = make_bing()
-        file_path = Path('/tmp/test_save_image.png')
-
-        with patch('builtins.open', unittest.mock.mock_open()) as mock_file:
-            b.save_image('http://example.com/image.png', file_path)
-            mock_file.assert_called_once_with(str(file_path), 'wb')
+        with patch('builtins.open', mock_open()):
+            b.save_image('http://example.com/img.png', Path('/tmp/img.png'))
 
     @patch('bing_image_downloader.bing.urllib.request.urlopen')
     def test_save_invalid_image_raises(self, mock_urlopen):
-        mock_response = MagicMock()
-        mock_response.read.return_value = b'not an image'
-        mock_urlopen.return_value = mock_response
-
+        mock_urlopen.return_value = MagicMock(read=lambda: b'not an image')
         b = make_bing()
         with self.assertRaises(ValueError):
             b.save_image('http://example.com/bad.jpg', Path('/tmp/bad.jpg'))
 
-    @patch('bing_image_downloader.bing.urllib.request.urlopen')
-    def test_save_image_with_resize(self, mock_urlopen):
-        png_data = self._make_valid_png()
-        mock_response = MagicMock()
-        mock_response.read.return_value = png_data
-        mock_urlopen.return_value = mock_response
 
-        b = make_bing(resize=(5, 5))
-        file_path = Path('/tmp/test_resize.jpg')
-
-        with patch('builtins.open', unittest.mock.mock_open()) as mock_file:
-            b.save_image('http://example.com/image.jpg', file_path)
-            # When resizing, file is saved as .png regardless of original extension
-            mock_file.assert_called_once_with(str(file_path.with_suffix('.png')), 'wb')
-
+# ---------------------------------------------------------------------------
+# Bing.download_image
+# ---------------------------------------------------------------------------
 
 class TestDownloadImage(unittest.TestCase):
-    def _make_valid_png(self):
-        from PIL import Image
-        buf = BytesIO()
-        img = Image.new('RGB', (10, 10), color='blue')
-        img.save(buf, format='PNG')
-        return buf.getvalue()
+    VALID_PNG = b'\x89PNG\r\n\x1a\n' + b'\x00' * 20
 
     @patch('bing_image_downloader.bing.urllib.request.urlopen')
-    def test_download_increments_count(self, mock_urlopen):
-        png_data = self._make_valid_png()
-        mock_response = MagicMock()
-        mock_response.read.return_value = png_data
-        mock_urlopen.return_value = mock_response
-
+    def test_success_increments_count(self, mock_urlopen):
+        mock_urlopen.return_value = MagicMock(read=lambda: self.VALID_PNG)
         b = make_bing()
-        with patch('builtins.open', unittest.mock.mock_open()):
+        with patch('builtins.open', mock_open()):
             b.download_image('http://example.com/cat.jpg')
-
         self.assertEqual(b.download_count, 1)
 
     @patch('bing_image_downloader.bing.urllib.request.urlopen')
-    def test_download_failure_does_not_increment(self, mock_urlopen):
+    def test_failure_does_not_increment(self, mock_urlopen):
         mock_urlopen.side_effect = Exception('Network error')
-
         b = make_bing()
         b.download_image('http://example.com/fail.jpg')
-
         self.assertEqual(b.download_count, 0)
 
     @patch('bing_image_downloader.bing.urllib.request.urlopen')
     def test_unknown_extension_defaults_to_jpg(self, mock_urlopen):
-        png_data = self._make_valid_png()
-        mock_response = MagicMock()
-        mock_response.read.return_value = png_data
-        mock_urlopen.return_value = mock_response
-
-        b = make_bing(output_dir=Path('/tmp'))
-        saved_paths = []
-
-        original_open = open
-
-        def mock_open_capture(path, mode='r', **kwargs):
-            if mode == 'wb':
-                saved_paths.append(path)
-                return MagicMock().__enter__.return_value
-            return original_open(path, mode, **kwargs)
-
-        with patch('builtins.open', unittest.mock.mock_open()) as m:
+        mock_urlopen.return_value = MagicMock(read=lambda: self.VALID_PNG)
+        b = make_bing()
+        with patch('builtins.open', mock_open()):
             b.download_image('http://example.com/image.unknownext')
-
         self.assertEqual(b.download_count, 1)
 
-    def test_spaces_in_url_encoded(self):
-        # Test that spaces in URLs are handled (the PR #62 fix)
-        b = make_bing()
-        link_with_space = 'http://example.com/my image.jpg'
-        encoded = link_with_space.replace(' ', '%20')
-        # The run() method does this replacement before calling download_image
-        self.assertEqual(encoded, 'http://example.com/my%20image.jpg')
+    def test_spaces_in_url_are_encoded(self):
+        # run() encodes spaces before calling download_image
+        link = 'http://example.com/my image.jpg'
+        self.assertEqual(link.replace(' ', '%20'), 'http://example.com/my%20image.jpg')
 
+
+# ---------------------------------------------------------------------------
+# Bing.run
+# ---------------------------------------------------------------------------
 
 class TestRun(unittest.TestCase):
-    def _make_html_response(self, urls):
-        parts = []
-        for url in urls:
-            parts.append(f'murl&quot;:&quot;{url}&quot;')
-        return ' '.join(parts)
+    VALID_PNG = b'\x89PNG\r\n\x1a\n' + b'\x00' * 20
 
-    @patch('bing_image_downloader.bing.urllib.request.urlopen')
-    def test_run_stops_at_limit(self, mock_urlopen):
-        from PIL import Image
-        buf = BytesIO()
-        Image.new('RGB', (5, 5), 'green').save(buf, format='PNG')
-        png_data = buf.getvalue()
+    def _page_html(self, urls):
+        return ' '.join(f'murl&quot;:&quot;{u}&quot;' for u in urls).encode('utf8')
 
-        img_urls = [f'http://example.com/img{i}.jpg' for i in range(10)]
-        page_html = self._make_html_response(img_urls)
-
-        call_count = [0]
+    def _mock_urlopen(self, mock_urlopen, img_urls):
+        page_html = self._page_html(img_urls)
 
         def side_effect(request, timeout=None):
             resp = MagicMock()
-            if hasattr(request, 'full_url') and 'bing.com' in request.full_url:
-                resp.read.return_value = page_html.encode('utf8')
-            else:
-                resp.read.return_value = png_data
+            url = request.full_url if hasattr(request, 'full_url') else str(request)
+            resp.read.return_value = page_html if 'bing.com' in url else self.VALID_PNG
             return resp
 
         mock_urlopen.side_effect = side_effect
 
+    @patch('bing_image_downloader.bing.urllib.request.urlopen')
+    def test_stops_at_limit(self, mock_urlopen):
+        self._mock_urlopen(mock_urlopen, [f'http://example.com/img{i}.jpg' for i in range(10)])
         b = make_bing(limit=3)
-        with patch('builtins.open', unittest.mock.mock_open()):
+        with patch('builtins.open', mock_open()):
             b.run()
-
         self.assertEqual(b.download_count, 3)
 
     @patch('bing_image_downloader.bing.urllib.request.urlopen')
-    def test_run_stops_on_empty_response(self, mock_urlopen):
-        resp = MagicMock()
-        resp.read.return_value = b''
-        mock_urlopen.return_value = resp
-
+    def test_stops_on_empty_response(self, mock_urlopen):
+        mock_urlopen.return_value = MagicMock(read=lambda: b'')
         b = make_bing(limit=10)
         b.run()
-
         self.assertEqual(b.download_count, 0)
 
     @patch('bing_image_downloader.bing.urllib.request.urlopen')
-    def test_run_deduplicates_urls(self, mock_urlopen):
-        from PIL import Image
-        buf = BytesIO()
-        Image.new('RGB', (5, 5), 'blue').save(buf, format='PNG')
-        png_data = buf.getvalue()
-
-        # Same URL repeated — should only download once, then stop (no new images)
-        img_urls = ['http://example.com/same.jpg'] * 5
-        page_html = self._make_html_response(img_urls)
-
-        def side_effect(request, timeout=None):
-            resp = MagicMock()
-            if hasattr(request, 'full_url') and 'bing.com' in request.full_url:
-                resp.read.return_value = page_html.encode('utf8')
-            else:
-                resp.read.return_value = png_data
-            return resp
-
-        mock_urlopen.side_effect = side_effect
-
+    def test_deduplicates_urls(self, mock_urlopen):
+        # All same URL — downloads once, then no new images → stops
+        self._mock_urlopen(mock_urlopen, ['http://example.com/same.jpg'] * 5)
         b = make_bing(limit=10)
-        with patch('builtins.open', unittest.mock.mock_open()):
+        with patch('builtins.open', mock_open()):
             b.run()
-
-        # Only 1 unique URL — deduplication stops after first page finds no new images
         self.assertEqual(b.download_count, 1)
 
+
+# ---------------------------------------------------------------------------
+# downloader.download()
+# ---------------------------------------------------------------------------
 
 class TestDownloaderFunction(unittest.TestCase):
     @patch('bing_image_downloader.downloader.Bing')
     def test_adult_filter_off(self, MockBing):
-        mock_bing_instance = MagicMock()
-        MockBing.return_value = mock_bing_instance
-
+        MockBing.return_value = MagicMock()
         with patch('bing_image_downloader.downloader.Path.is_dir', return_value=True):
             download('cats', limit=5, adult_filter_off=True, verbose=False)
-
-        args = MockBing.call_args[0]
-        self.assertEqual(args[3], 'off')
+        self.assertEqual(MockBing.call_args[0][3], 'off')
 
     @patch('bing_image_downloader.downloader.Bing')
     def test_adult_filter_on(self, MockBing):
-        mock_bing_instance = MagicMock()
-        MockBing.return_value = mock_bing_instance
-
+        MockBing.return_value = MagicMock()
         with patch('bing_image_downloader.downloader.Path.is_dir', return_value=True):
             download('cats', limit=5, adult_filter_off=False, verbose=False)
-
-        args = MockBing.call_args[0]
-        self.assertEqual(args[3], 'on')
+        self.assertEqual(MockBing.call_args[0][3], 'on')
 
     @patch('bing_image_downloader.downloader.shutil.rmtree')
     @patch('bing_image_downloader.downloader.Bing')
     def test_force_replace_removes_dir(self, MockBing, mock_rmtree):
         MockBing.return_value = MagicMock()
-
         with patch('bing_image_downloader.downloader.Path.is_dir', return_value=True):
             download('cats', force_replace=True, verbose=False)
-
         mock_rmtree.assert_called_once()
 
     @patch('bing_image_downloader.downloader.shutil.rmtree')
     @patch('bing_image_downloader.downloader.Bing')
     def test_no_force_replace_keeps_dir(self, MockBing, mock_rmtree):
         MockBing.return_value = MagicMock()
-
         with patch('bing_image_downloader.downloader.Path.is_dir', return_value=True):
             download('cats', force_replace=False, verbose=False)
-
         mock_rmtree.assert_not_called()
 
 
-class TestImportedApi(unittest.TestCase):
+# ---------------------------------------------------------------------------
+# CLI (__main__)
+# ---------------------------------------------------------------------------
+
+class TestCLI(unittest.TestCase):
+    @patch('bing_image_downloader.__main__.download')
+    def test_basic_invocation(self, mock_dl):
+        with patch('sys.argv', ['bing_image_downloader', 'cats']):
+            from bing_image_downloader.__main__ import main
+            main()
+        mock_dl.assert_called_once()
+        kwargs = mock_dl.call_args[1]
+        self.assertEqual(kwargs['query'], 'cats')
+        self.assertEqual(kwargs['limit'], 100)
+        self.assertTrue(kwargs['adult_filter_off'])
+        self.assertTrue(kwargs['verbose'])
+
+    @patch('bing_image_downloader.__main__.download')
+    def test_limit_flag(self, mock_dl):
+        with patch('sys.argv', ['bing_image_downloader', 'dogs', '--limit', '25']):
+            from bing_image_downloader.__main__ import main
+            main()
+        self.assertEqual(mock_dl.call_args[1]['limit'], 25)
+
+    @patch('bing_image_downloader.__main__.download')
+    def test_adult_filter_on_flag(self, mock_dl):
+        with patch('sys.argv', ['bing_image_downloader', 'cats', '--adult-filter-on']):
+            from bing_image_downloader.__main__ import main
+            main()
+        self.assertFalse(mock_dl.call_args[1]['adult_filter_off'])
+
+    @patch('bing_image_downloader.__main__.download')
+    def test_quiet_flag(self, mock_dl):
+        with patch('sys.argv', ['bing_image_downloader', 'cats', '--quiet']):
+            from bing_image_downloader.__main__ import main
+            main()
+        self.assertFalse(mock_dl.call_args[1]['verbose'])
+
+    @patch('bing_image_downloader.__main__.download')
+    def test_force_replace_flag(self, mock_dl):
+        with patch('sys.argv', ['bing_image_downloader', 'cats', '--force-replace']):
+            from bing_image_downloader.__main__ import main
+            main()
+        self.assertTrue(mock_dl.call_args[1]['force_replace'])
+
+    @patch('bing_image_downloader.__main__.download')
+    def test_filter_flag(self, mock_dl):
+        with patch('sys.argv', ['bing_image_downloader', 'cats', '--filter', 'clipart']):
+            from bing_image_downloader.__main__ import main
+            main()
+        self.assertEqual(mock_dl.call_args[1]['filter'], 'clipart')
+
+    def test_invalid_filter_exits(self):
+        with patch('sys.argv', ['bing_image_downloader', 'cats', '--filter', 'invalid']):
+            from bing_image_downloader.__main__ import main
+            with self.assertRaises(SystemExit):
+                main()
+
+    @patch('bing_image_downloader.__main__.download')
+    def test_output_dir_flag(self, mock_dl):
+        with patch('sys.argv', ['bing_image_downloader', 'cats', '--output-dir', '/tmp/imgs']):
+            from bing_image_downloader.__main__ import main
+            main()
+        self.assertEqual(mock_dl.call_args[1]['output_dir'], '/tmp/imgs')
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+class TestPublicApi(unittest.TestCase):
     def test_download_importable_from_package(self):
         from bing_image_downloader import download as dl
         self.assertTrue(callable(dl))

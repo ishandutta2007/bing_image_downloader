@@ -14,7 +14,6 @@ setuptools.setup(
     url="https://github.com/gurugaurav/bing_image_downloader",
     keywords=['bing', 'images', 'scraping', 'image download', 'bulk image downloader'],
     packages=['bing_image_downloader'],
-    install_requires=['Pillow>=9.0.0'],
     python_requires='>=3.6',
     classifiers=[
         "Programming Language :: Python :: 3",

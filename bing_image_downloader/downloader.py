@@ -9,7 +9,7 @@ except ImportError:
 
 
 def download(query, limit=100, output_dir='dataset', adult_filter_off=True,
-             force_replace=False, timeout=60, filter='', resize=None, verbose=True):
+             force_replace=False, timeout=60, filter='', verbose=True):
 
     adult = 'off' if adult_filter_off else 'on'
 
@@ -26,5 +26,5 @@ def download(query, limit=100, output_dir='dataset', adult_filter_off=True,
         sys.exit(1)
 
     print(f'[%] Downloading Images to {image_dir}')
-    bing = Bing(query, limit, image_dir, adult, timeout, filter, resize, verbose)
+    bing = Bing(query, limit, image_dir, adult, timeout, filter, verbose)
     bing.run()

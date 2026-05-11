@@ -3,17 +3,32 @@ import urllib.request
 import urllib.parse
 import posixpath
 import re
-from PIL import Image
-from io import BytesIO
 
 '''
 Python api to download image form Bing.
 Author: Guru Prasad (g.gaurav541@gmail.com)
 '''
 
+# Magic bytes for common image formats
+_IMAGE_MAGIC = [
+    b'\xff\xd8\xff',        # JPEG
+    b'\x89PNG\r\n\x1a\n',  # PNG
+    b'GIF87a', b'GIF89a',  # GIF
+    b'BM',                  # BMP
+    b'II\x2a\x00', b'MM\x00\x2a',  # TIFF
+]
+
+
+def _is_valid_image(data):
+    for magic in _IMAGE_MAGIC:
+        if data.startswith(magic):
+            return True
+    # WEBP: RIFF????WEBP
+    return len(data) >= 12 and data[:4] == b'RIFF' and data[8:12] == b'WEBP'
+
 
 class Bing:
-    def __init__(self, query, limit, output_dir, adult, timeout, filter='', resize=None, verbose=True):
+    def __init__(self, query, limit, output_dir, adult, timeout, filter='', verbose=True):
         self.download_count = 0
         self.query = query
         self.output_dir = output_dir
@@ -27,8 +42,6 @@ class Bing:
         self.limit = limit
         assert isinstance(timeout, int), "timeout must be integer"
         self.timeout = timeout
-        assert resize is None or isinstance(resize, tuple), "resize must be a tuple (width, height)"
-        self.resize = resize
 
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.11 (KHTML, like Gecko) Chrome/23.0.1271.64 Safari/537.11',
@@ -54,20 +67,8 @@ class Bing:
     def save_image(self, link, file_path):
         request = urllib.request.Request(link, None, self.headers)
         data = urllib.request.urlopen(request, timeout=self.timeout).read()
-
-        try:
-            Image.open(BytesIO(data)).verify()
-        except Exception:
+        if not _is_valid_image(data):
             raise ValueError(f'Invalid image, not saving {link}')
-
-        if self.resize:
-            img = Image.open(BytesIO(data))
-            img = img.resize(self.resize, resample=Image.LANCZOS)
-            buf = BytesIO()
-            img.save(buf, format='PNG')
-            data = buf.getvalue()
-            file_path = file_path.with_suffix('.png')
-
         with open(str(file_path), 'wb') as f:
             f.write(data)
 
