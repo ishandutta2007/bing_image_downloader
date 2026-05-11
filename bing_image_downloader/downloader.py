@@ -1,4 +1,5 @@
 import sys
+import re
 import shutil
 from pathlib import Path
 
@@ -13,7 +14,9 @@ def download(query, limit=100, output_dir='dataset', adult_filter_off=True,
 
     adult = 'off' if adult_filter_off else 'on'
 
-    image_dir = Path(output_dir).joinpath(query).absolute()
+    # Sanitize query for use as a folder name; keep the original query for the search
+    safe_folder = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', query).strip('. ')
+    image_dir = Path(output_dir).joinpath(safe_folder).absolute()
 
     if force_replace and Path.is_dir(image_dir):
         shutil.rmtree(image_dir)

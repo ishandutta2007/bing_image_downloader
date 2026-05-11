@@ -2,6 +2,7 @@ from pathlib import Path
 import urllib.request
 import urllib.parse
 import posixpath
+import html as _html
 import re
 
 '''
@@ -65,7 +66,16 @@ class Bing:
         return filters.get(shorthand, '')
 
     def save_image(self, link, file_path):
-        request = urllib.request.Request(link, None, self.headers)
+        # Re-encode URL to handle non-ASCII characters (e.g. accented chars in path)
+        parsed = urllib.parse.urlsplit(link)
+        safe_link = urllib.parse.urlunsplit((
+            parsed.scheme,
+            parsed.netloc,
+            urllib.parse.quote(parsed.path, safe='/:@!$&\'()*+,;='),
+            urllib.parse.quote(parsed.query, safe='=&+%:@!$\'()*,;'),
+            parsed.fragment,
+        ))
+        request = urllib.request.Request(safe_link, None, self.headers)
         data = urllib.request.urlopen(request, timeout=self.timeout).read()
         if not _is_valid_image(data):
             raise ValueError(f'Invalid image, not saving {link}')
@@ -97,14 +107,14 @@ class Bing:
             if self.verbose:
                 print(f'\n\n[!!] Indexing page: {self.page_counter + 1}\n')
 
-            request_url = (
-                'https://www.bing.com/images/async?q='
-                + urllib.parse.quote_plus(self.query)
-                + '&first=' + str(self.page_counter)
-                + '&count=' + str(self.limit)
-                + '&adlt=' + self.adult
-                + '&qft=' + self.get_filter(self.filter or '')
-            )
+            params = urllib.parse.urlencode({
+                'q': self.query,
+                'first': self.page_counter,
+                'count': self.limit,
+                'adlt': self.adult,
+                'qft': self.get_filter(self.filter or ''),
+            })
+            request_url = 'https://www.bing.com/images/async?' + params
             request = urllib.request.Request(request_url, None, headers=self.headers)
             response = urllib.request.urlopen(request, timeout=self.timeout)
             html = response.read().decode('utf8')
@@ -113,8 +123,9 @@ class Bing:
                 print('[%] No more images are available')
                 break
 
+            # Unescape HTML entities in extracted URLs (e.g. &amp; → &) before encoding
             links = re.findall('murl&quot;:&quot;(.*?)&quot;', html)
-            links = [link.replace(' ', '%20') for link in links]
+            links = [_html.unescape(link).replace(' ', '%20') for link in links]
 
             if self.verbose:
                 print(f'[%] Indexed {len(links)} Images on Page {self.page_counter + 1}.')
