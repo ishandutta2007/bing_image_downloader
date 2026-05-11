@@ -1,1 +1,1 @@
-name = "bing_image_downloader"
+from .downloader import download
