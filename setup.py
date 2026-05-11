@@ -12,11 +12,12 @@ setuptools.setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/gurugaurav/bing_image_downloader",
-    keywords=['bing', 'images', 'scraping', 'image download', 'bulk image downloader',],
+    keywords=['bing', 'images', 'scraping', 'image download', 'bulk image downloader'],
     packages=['bing_image_downloader'],
+    python_requires='>=3.6',
     classifiers=[
-	"Programming Language :: Python :: 3",
-	"License :: OSI Approved :: MIT License",
-	"Operating System :: OS Independent",
-        ]
+        "Programming Language :: Python :: 3",
+        "License :: OSI Approved :: MIT License",
+        "Operating System :: OS Independent",
+    ],
 )
