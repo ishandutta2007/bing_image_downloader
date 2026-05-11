@@ -14,7 +14,7 @@ on:
       - created
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-and-publish:
@@ -77,7 +77,7 @@ jobs:
 
       - name: Upload build artifacts
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: python-package-distributions
           path: dist/
