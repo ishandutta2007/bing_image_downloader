@@ -106,7 +106,7 @@ class Bing:
                 + '&qft=' + self.get_filter(self.filter or '')
             )
             request = urllib.request.Request(request_url, None, headers=self.headers)
-            response = urllib.request.urlopen(request)
+            response = urllib.request.urlopen(request, timeout=self.timeout)
             html = response.read().decode('utf8')
 
             if html == '':
